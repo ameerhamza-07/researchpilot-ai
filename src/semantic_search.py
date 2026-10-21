@@ -1,4 +1,4 @@
-
+from src.index_store import INDEX_DIR, load_index, save_index
 from pathlib import Path
 
 import numpy as np
@@ -71,16 +71,25 @@ def search_chunks(
     return results
 
 
-def main():
-    pages = extract_pdf_text(PDF_PATH)
-    chunks = chunk_pages(pages)
 
+def main():
     print(f"Loading embedding model: {MODEL_NAME}")
     model = SentenceTransformer(MODEL_NAME, device="cpu")
 
-    embeddings = build_search_index(chunks, model)
+    chunks_path = INDEX_DIR / "chunks.json"
+    embeddings_path = INDEX_DIR / "embeddings.npy"
 
-    print(f"\nIndexed {len(chunks)} chunks.")
+    if chunks_path.exists() and embeddings_path.exists():
+        print("Loading saved index...")
+        chunks, embeddings = load_index()
+    else:
+        print("Building a new index from the PDF...")
+        pages = extract_pdf_text(PDF_PATH)
+        chunks = chunk_pages(pages)
+        embeddings = build_search_index(chunks, model)
+        save_index(chunks, embeddings)
+
+    print(f"\nIndexed chunks: {len(chunks)}")
     print(f"Embedding shape: {embeddings.shape}")
 
     while True:
@@ -109,3 +118,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

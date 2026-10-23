@@ -1,14 +1,10 @@
 
-import hashlib
-
-import pymupdf
 import streamlit as st
 from sentence_transformers import SentenceTransformer
 
-from src.chunk_text import chunk_pages
+from src.paper_library import add_paper, list_papers, load_paper
 from src.rag import answer_question
-from src.semantic_search import MODEL_NAME, build_search_index
-from src.index_store import load_index
+from src.semantic_search import MODEL_NAME
 
 
 st.set_page_config(
@@ -20,21 +16,15 @@ st.set_page_config(
 
 @st.cache_resource
 def load_embedding_model():
+    """Load the embedding model once and reuse it."""
     return SentenceTransformer(MODEL_NAME, device="cpu")
 
 
-@st.cache_resource
-def load_saved_index():
-    return load_index()
-
-
 def initialize_state():
+    """Initialize Streamlit session state."""
     defaults = {
         "messages": [],
-        "active_chunks": None,
-        "active_embeddings": None,
-        "active_paper_name": None,
-        "active_pdf_hash": None,
+        "selected_paper_id": None,
     }
 
     for key, value in defaults.items():
@@ -42,36 +32,23 @@ def initialize_state():
             st.session_state[key] = value
 
 
-def process_pdf(pdf_bytes: bytes):
-    """Extract, chunk, and embed an uploaded PDF."""
+def render_sources(sources):
+    """Display the passages retrieved for an answer."""
+    if not sources:
+        st.info("No supporting passages were retrieved.")
+        return
 
-    pages = []
-
-    with pymupdf.open(stream=pdf_bytes, filetype="pdf") as document:
-        for page_number, page in enumerate(document, start=1):
-            text = page.get_text("text", sort=True).strip()
-
-            if text:
-                pages.append({
-                    "page": page_number,
-                    "text": text,
-                })
-
-    if not pages:
-        raise ValueError(
-            "No extractable text found. The PDF may be scanned "
-            "or image-only; OCR support is not implemented yet."
-        )
-
-    chunks = chunk_pages(pages)
-
-    if not chunks:
-        raise ValueError("No text chunks could be created from this PDF.")
-
-    model = load_embedding_model()
-    embeddings = build_search_index(chunks, model)
-
-    return chunks, embeddings, len(pages)
+    with st.expander(
+        f"View retrieved evidence ({len(sources)} passages)"
+    ):
+        for source in sources:
+            st.markdown(
+                f"**[{source['source_id']}] "
+                f"Page {source['page']}** · "
+                f"Similarity: {source['score']:.3f}"
+            )
+            st.write(source["text"])
+            st.divider()
 
 
 def main():
@@ -79,129 +56,151 @@ def main():
 
     st.title("📚 ResearchPilot AI")
     st.caption(
-        "Upload a research paper, ask questions, and inspect "
-        "the passages used to generate answers."
+        "Your local AI research assistant. Upload research papers, "
+        "ask questions, and inspect the supporting passages."
     )
 
+    # ---------------------------------------------------------
+    # Sidebar: upload papers and manage the research library
+    # ---------------------------------------------------------
     with st.sidebar:
-        st.header("Research paper")
+        st.header("Research Library")
 
-        uploaded_file = st.file_uploader(
-            "Upload a PDF paper",
+        uploaded_files = st.file_uploader(
+            "Upload research papers",
             type=["pdf"],
-            help="Text-based PDFs are supported. Scanned PDFs need OCR.",
+            accept_multiple_files=True,
+            help="Upload text-based PDF research papers.",
         )
 
-        if uploaded_file is not None:
-            pdf_bytes = uploaded_file.getvalue()
-            pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+        if st.button(
+            "Add papers to library",
+            type="primary",
+            use_container_width=True,
+            disabled=not uploaded_files,
+        ):
+            try:
+                embedding_model = load_embedding_model()
 
-            if st.button(
-                "Process PDF",
-                type="primary",
-                use_container_width=True,
-            ):
-                try:
-                    with st.spinner(
-                        "Extracting text and generating embeddings..."
-                    ):
-                        chunks, embeddings, page_count = process_pdf(
-                            pdf_bytes
+                for uploaded_file in uploaded_files:
+                    try:
+                        with st.spinner(
+                            f"Processing {uploaded_file.name}..."
+                        ):
+                            metadata = add_paper(
+                                pdf_bytes=uploaded_file.getvalue(),
+                                filename=uploaded_file.name,
+                                embedding_model=embedding_model,
+                            )
+
+                        st.success(
+                            f"Added: {metadata['filename']}"
                         )
 
-                    st.session_state.active_chunks = chunks
-                    st.session_state.active_embeddings = embeddings
-                    st.session_state.active_paper_name = uploaded_file.name
-                    st.session_state.active_pdf_hash = pdf_hash
-                    st.session_state.messages = []
+                    except Exception as error:
+                        st.error(
+                            f"Failed to process "
+                            f"{uploaded_file.name}: {error}"
+                        )
 
-                    st.success(
-                        f"Processed {page_count} pages into "
-                        f"{len(chunks)} chunks."
-                    )
-
-                except Exception as error:
-                    st.error(f"PDF processing failed: {error}")
+            except Exception as error:
+                st.error(f"Could not load embedding model: {error}")
 
         st.divider()
-        st.header("Configuration")
-        st.write(f"**LLM:** Qwen3 4B")
-        st.write(f"**Embeddings:** {MODEL_NAME}")
-        st.write("**Inference:** Local Ollama")
+        st.subheader("Your papers")
 
-        if st.button("Clear conversation", use_container_width=True):
-            st.session_state.messages = []
-            st.rerun()
+        papers = list_papers()
 
-        if st.button("Use saved index", use_container_width=True):
-            st.session_state.active_chunks = None
-            st.session_state.active_embeddings = None
-            st.session_state.active_paper_name = None
-            st.session_state.active_pdf_hash = None
-            st.session_state.messages = []
-            st.rerun()
-
-    # Use the uploaded paper if it has been processed.
-    if st.session_state.active_chunks is not None:
-        chunks = st.session_state.active_chunks
-        embeddings = st.session_state.active_embeddings
-        paper_name = st.session_state.active_paper_name
-
-    else:
-        try:
-            chunks, embeddings = load_saved_index()
-            paper_name = "Saved research paper index"
-        except FileNotFoundError:
+        if not papers:
             st.info(
-                "Upload a PDF and select Process PDF, or create a saved "
-                "index first using `python -m src.semantic_search`."
+                "Your library is empty. Upload a PDF and click "
+                "'Add papers to library' to get started."
             )
             st.stop()
-        except Exception as error:
-            st.error(f"Could not load the saved index: {error}")
-            st.stop()
 
-    st.success(f"Active paper: {paper_name} · {len(chunks)} chunks")
+        paper_options = {
+            paper["paper_id"]: paper["filename"]
+            for paper in papers
+        }
 
-    # Load the embedding model once and reuse it.
+        selected_id = st.selectbox(
+            "Select a paper",
+            options=list(paper_options.keys()),
+            format_func=lambda paper_id: paper_options[paper_id],
+            key="paper_selector",
+        )
+
+        st.divider()
+        st.subheader("Model configuration")
+        st.write("**Language model:** Qwen3 4B")
+        st.write("**Embeddings:** MiniLM")
+        st.write("**Inference:** Local via Ollama")
+
+        if st.button(
+            "Clear conversation",
+            use_container_width=True,
+        ):
+            st.session_state.messages = []
+            st.rerun()
+
+        st.caption(
+            "Paper indexes are stored locally in data/library/."
+        )
+
+    # ---------------------------------------------------------
+    # Load the selected paper and reset chat when switching
+    # ---------------------------------------------------------
+    if st.session_state.selected_paper_id != selected_id:
+        st.session_state.selected_paper_id = selected_id
+        st.session_state.messages = []
+
+    paper_name = paper_options[selected_id]
+
     try:
-        embedding_model = load_embedding_model()
+        chunks, embeddings = load_paper(selected_id)
     except Exception as error:
-        st.error(f"Could not load the embedding model: {error}")
+        st.error(f"Could not load '{paper_name}': {error}")
         st.stop()
 
-    # Display conversation history and evidence.
+    st.success(
+        f"Active paper: {paper_name} · {len(chunks)} chunks"
+    )
+
+    # ---------------------------------------------------------
+    # Display previous conversation messages
+    # ---------------------------------------------------------
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-            if message["role"] == "assistant" and message.get("sources"):
-                with st.expander("View retrieved evidence"):
-                    for source in message["sources"]:
-                        st.markdown(
-                            f"**[{source['source_id']}] "
-                            f"Page {source['page']}** · "
-                            f"Similarity: {source['score']:.3f}"
-                        )
-                        st.write(source["text"])
-                        st.divider()
+            if message["role"] == "assistant":
+                render_sources(message.get("sources", []))
 
+    # ---------------------------------------------------------
+    # Chat input and RAG question answering
+    # ---------------------------------------------------------
     question = st.chat_input(
         f"Ask a question about {paper_name}..."
     )
 
     if question:
-        st.session_state.messages.append({
-            "role": "user",
-            "content": question,
-        })
+        st.session_state.messages.append(
+            {
+                "role": "user",
+                "content": question,
+            }
+        )
 
         with st.chat_message("user"):
             st.markdown(question)
 
         with st.chat_message("assistant"):
-            with st.spinner("Retrieving evidence and asking Qwen3 4B..."):
-                try:
+            try:
+                with st.spinner(
+                    "Searching the paper and generating an answer..."
+                ):
+                    embedding_model = load_embedding_model()
+
                     result = answer_question(
                         question=question,
                         chunks=chunks,
@@ -209,35 +208,28 @@ def main():
                         embedding_model=embedding_model,
                     )
 
-                    answer = result["answer"]
-                    sources = result["sources"]
+                answer = result["answer"]
+                sources = result["sources"]
 
-                    st.markdown(answer)
+                st.markdown(answer)
+                render_sources(sources)
 
-                    if sources:
-                        with st.expander(
-                            f"View retrieved evidence ({len(sources)} passages)",
-                            expanded=True,
-                        ):
-                            for source in sources:
-                                st.markdown(
-                                    f"**[{source['source_id']}] "
-                                    f"Page {source['page']}** · "
-                                    f"Similarity: {source['score']:.3f}"
-                                )
-                                st.write(source["text"])
-                                st.divider()
-                    else:
-                        st.info("No evidence passages were retrieved.")
-
-                    st.session_state.messages.append({
+                st.session_state.messages.append(
+                    {
                         "role": "assistant",
                         "content": answer,
                         "sources": sources,
-                    })
+                    }
+                )
 
-                except Exception as error:
-                    st.error(f"Could not generate an answer: {error}")
+            except Exception as error:
+                st.error(
+                    f"Could not generate an answer: {error}"
+                )
+                st.caption(
+                    "Check that Ollama is running, qwen3:4b is "
+                    "installed, and the selected paper index is valid."
+                )
 
 
 if __name__ == "__main__":

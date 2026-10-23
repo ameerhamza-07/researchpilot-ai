@@ -9,3 +9,4 @@ __pycache__/
 .vscode/
 data/papers/*.pdf
 data/index/
+data/library/

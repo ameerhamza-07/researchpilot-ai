@@ -4,6 +4,7 @@ from sentence_transformers import SentenceTransformer
 
 from src.paper_library import add_paper, list_papers, load_paper
 from src.rag import answer_question
+from src.cross_paper import answer_across_papers
 from src.semantic_search import MODEL_NAME
 
 
@@ -16,24 +17,20 @@ st.set_page_config(
 
 @st.cache_resource
 def load_embedding_model():
-    """Load the embedding model once and reuse it."""
     return SentenceTransformer(MODEL_NAME, device="cpu")
 
 
 def initialize_state():
-    """Initialize Streamlit session state."""
     defaults = {
         "messages": [],
-        "selected_paper_id": None,
+        "chat_context": None,
     }
-
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
 def render_sources(sources):
-    """Display the passages retrieved for an answer."""
     if not sources:
         st.info("No supporting passages were retrieved.")
         return
@@ -42,11 +39,21 @@ def render_sources(sources):
         f"View retrieved evidence ({len(sources)} passages)"
     ):
         for source in sources:
-            st.markdown(
-                f"**[{source['source_id']}] "
-                f"Page {source['page']}** · "
-                f"Similarity: {source['score']:.3f}"
-            )
+            source_name = source.get("paper_name")
+
+            if source_name:
+                st.markdown(
+                    f"**{source['source_id']} — {source_name}**  \n"
+                    f"Page {source['page']} · "
+                    f"Similarity: {source['score']:.3f}"
+                )
+            else:
+                st.markdown(
+                    f"**[{source['source_id']}] "
+                    f"Page {source['page']}** · "
+                    f"Similarity: {source['score']:.3f}"
+                )
+
             st.write(source["text"])
             st.divider()
 
@@ -56,13 +63,13 @@ def main():
 
     st.title("📚 ResearchPilot AI")
     st.caption(
-        "Your local AI research assistant. Upload research papers, "
-        "ask questions, and inspect the supporting passages."
+        "Explore research papers, ask evidence-grounded questions, "
+        "and compare findings across documents."
     )
 
-    # ---------------------------------------------------------
-    # Sidebar: upload papers and manage the research library
-    # ---------------------------------------------------------
+    # ------------------------------------------------------
+    # Sidebar: upload papers and choose research mode
+    # ------------------------------------------------------
     with st.sidebar:
         st.header("Research Library")
 
@@ -70,7 +77,6 @@ def main():
             "Upload research papers",
             type=["pdf"],
             accept_multiple_files=True,
-            help="Upload text-based PDF research papers.",
         )
 
         if st.button(
@@ -81,6 +87,7 @@ def main():
         ):
             try:
                 embedding_model = load_embedding_model()
+                added_count = 0
 
                 for uploaded_file in uploaded_files:
                     try:
@@ -96,25 +103,24 @@ def main():
                         st.success(
                             f"Added: {metadata['filename']}"
                         )
+                        added_count += 1
 
                     except Exception as error:
                         st.error(
-                            f"Failed to process "
                             f"{uploaded_file.name}: {error}"
                         )
 
+                if added_count:
+                    st.rerun()
+
             except Exception as error:
                 st.error(f"Could not load embedding model: {error}")
-
-        st.divider()
-        st.subheader("Your papers")
 
         papers = list_papers()
 
         if not papers:
             st.info(
-                "Your library is empty. Upload a PDF and click "
-                "'Add papers to library' to get started."
+                "Upload a research PDF to get started."
             )
             st.stop()
 
@@ -122,19 +128,40 @@ def main():
             paper["paper_id"]: paper["filename"]
             for paper in papers
         }
-
-        selected_id = st.selectbox(
-            "Select a paper",
-            options=list(paper_options.keys()),
-            format_func=lambda paper_id: paper_options[paper_id],
-            key="paper_selector",
-        )
+        paper_ids = list(paper_options.keys())
 
         st.divider()
-        st.subheader("Model configuration")
-        st.write("**Language model:** Qwen3 4B")
-        st.write("**Embeddings:** MiniLM")
-        st.write("**Inference:** Local via Ollama")
+        st.header("Research mode")
+
+        mode = st.radio(
+            "Choose a workflow",
+            ["Ask one paper", "Compare papers"],
+        )
+
+        selected_ids = []
+
+        if mode == "Ask one paper":
+            selected_id = st.selectbox(
+                "Select a paper",
+                options=paper_ids,
+                format_func=lambda pid: paper_options[pid],
+            )
+            selected_ids = [selected_id]
+
+        else:
+            default_ids = paper_ids[:2]
+
+            selected_ids = st.multiselect(
+                "Select papers to compare",
+                options=paper_ids,
+                default=default_ids,
+                format_func=lambda pid: paper_options[pid],
+                help="Select at least two papers for a comparison.",
+            )
+
+        st.divider()
+        st.caption("Language model: Qwen3 4B via Ollama")
+        st.caption(f"Embedding model: {MODEL_NAME}")
 
         if st.button(
             "Clear conversation",
@@ -143,32 +170,51 @@ def main():
             st.session_state.messages = []
             st.rerun()
 
-        st.caption(
-            "Paper indexes are stored locally in data/library/."
+    # ------------------------------------------------------
+    # Validate selection and reset chat on context changes
+    # ------------------------------------------------------
+    if mode == "Compare papers" and len(selected_ids) < 2:
+        st.warning(
+            "Select at least two papers in the sidebar "
+            "to use comparison mode."
         )
-
-    # ---------------------------------------------------------
-    # Load the selected paper and reset chat when switching
-    # ---------------------------------------------------------
-    if st.session_state.selected_paper_id != selected_id:
-        st.session_state.selected_paper_id = selected_id
-        st.session_state.messages = []
-
-    paper_name = paper_options[selected_id]
-
-    try:
-        chunks, embeddings = load_paper(selected_id)
-    except Exception as error:
-        st.error(f"Could not load '{paper_name}': {error}")
         st.stop()
 
-    st.success(
-        f"Active paper: {paper_name} · {len(chunks)} chunks"
-    )
+    current_context = (mode, tuple(selected_ids))
 
-    # ---------------------------------------------------------
-    # Display previous conversation messages
-    # ---------------------------------------------------------
+    if st.session_state.chat_context != current_context:
+        st.session_state.chat_context = current_context
+        st.session_state.messages = []
+
+    if mode == "Ask one paper":
+        paper_name = paper_options[selected_ids[0]]
+
+        try:
+            chunks, embeddings = load_paper(selected_ids[0])
+        except Exception as error:
+            st.error(f"Could not load paper: {error}")
+            st.stop()
+
+        st.success(
+            f"Active paper: {paper_name} · {len(chunks)} chunks"
+        )
+
+    else:
+        selected_names = [
+            paper_options[pid] for pid in selected_ids
+        ]
+
+        st.success(
+            f"Comparison mode · {len(selected_ids)} papers selected"
+        )
+
+        with st.expander("Selected papers", expanded=True):
+            for name in selected_names:
+                st.write(f"• {name}")
+
+    # ------------------------------------------------------
+    # Render conversation history
+    # ------------------------------------------------------
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -176,60 +222,66 @@ def main():
             if message["role"] == "assistant":
                 render_sources(message.get("sources", []))
 
-    # ---------------------------------------------------------
-    # Chat input and RAG question answering
-    # ---------------------------------------------------------
-    question = st.chat_input(
-        f"Ask a question about {paper_name}..."
+    placeholder = (
+        "Ask about this paper..."
+        if mode == "Ask one paper"
+        else "Ask a question comparing the selected papers..."
     )
 
-    if question:
-        st.session_state.messages.append(
-            {
-                "role": "user",
-                "content": question,
-            }
-        )
+    question = st.chat_input(placeholder)
 
-        with st.chat_message("user"):
-            st.markdown(question)
+    if not question:
+        return
 
-        with st.chat_message("assistant"):
-            try:
-                with st.spinner(
-                    "Searching the paper and generating an answer..."
-                ):
-                    embedding_model = load_embedding_model()
+    st.session_state.messages.append(
+        {"role": "user", "content": question}
+    )
 
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner(
+                "Retrieving evidence and generating an answer..."
+            ):
+                embedding_model = load_embedding_model()
+
+                if mode == "Ask one paper":
                     result = answer_question(
                         question=question,
                         chunks=chunks,
                         embeddings=embeddings,
                         embedding_model=embedding_model,
                     )
+                else:
+                    result = answer_across_papers(
+                        question=question,
+                        paper_ids=selected_ids,
+                        embedding_model=embedding_model,
+                        top_k_per_paper=2,
+                    )
 
-                answer = result["answer"]
-                sources = result["sources"]
+            answer = result["answer"]
+            sources = result["sources"]
 
-                st.markdown(answer)
-                render_sources(sources)
+            st.markdown(answer)
+            render_sources(sources)
 
-                st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": answer,
-                        "sources": sources,
-                    }
-                )
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": answer,
+                    "sources": sources,
+                }
+            )
 
-            except Exception as error:
-                st.error(
-                    f"Could not generate an answer: {error}"
-                )
-                st.caption(
-                    "Check that Ollama is running, qwen3:4b is "
-                    "installed, and the selected paper index is valid."
-                )
+        except Exception as error:
+            st.error(f"Could not generate an answer: {error}")
+            st.caption(
+                "Check that Ollama is running, qwen3:4b is installed, "
+                "and the selected paper indexes are valid."
+            )
 
 
 if __name__ == "__main__":

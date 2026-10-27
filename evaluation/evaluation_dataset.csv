@@ -1,0 +1,12 @@
+question_id,paper_id,question,expected_answer,expected_page,question_type
+Q01,bdfaa68d8984f0dc,"What is the main architectural contribution of the paper?","The Transformer relies entirely on attention mechanisms and dispenses with recurrence and convolutions.",2,factual
+Q02,bdfaa68d8984f0dc,"How many encoder and decoder layers are used in the base Transformer architecture?","Both the encoder and decoder use six identical layers.",3,factual
+Q03,bdfaa68d8984f0dc,"How many attention heads does the Transformer use, and what are the key and value dimensions per head?","It uses eight parallel attention heads, with key and value dimensions of 64 each.",4,factual
+Q04,bdfaa68d8984f0dc,"What BLEU score does the Transformer big model achieve on WMT 2014 English-to-German translation?","The Transformer big model achieves a BLEU score of 28.4.",8,factual
+Q05,bdfaa68d8984f0dc,"How does the paper encode token positions in the Transformer?","It adds positional encodings based on sine and cosine functions of different frequencies to the input embeddings.",6,methodological
+Q06,84801c8410da51b4,"What limitation of the basic encoder-decoder approach motivates the proposed method?","Compressing an entire source sentence into a fixed-length vector can make it difficult to handle long sentences.",1,factual
+Q07,84801c8410da51b4,"What encoder architecture does the proposed RNNsearch model use?","It uses a bidirectional recurrent neural network to produce source-word annotations.",3,methodological
+Q08,84801c8410da51b4,"How does the proposed attention mechanism construct the context vector for a target word?","It computes a weighted sum of source annotations using alignment weights.",3,methodological
+Q09,"bdfaa68d8984f0dc;84801c8410da51b4","What exact BLEU score did the two papers report on the same benchmark and test set?","The papers do not establish one directly comparable score on the same benchmark and test set.",,unanswerable
+Q10,bdfaa68d8984f0dc,"What was the exact monetary budget of the Transformer research project?","The paper does not report an exact monetary budget.",,unanswerable
+Q11,"bdfaa68d8984f0dc;84801c8410da51b4","How do the two papers use attention differently?","Bahdanau et al. use attention to align target words with annotations from a bidirectional RNN encoder. Vaswani et al. build the Transformer around attention mechanisms, replacing recurrence and convolution in the model architecture.",,"comparative"

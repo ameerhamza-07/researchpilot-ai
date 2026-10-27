@@ -1,0 +1,25 @@
+{
+  "total_questions": 11,
+  "successful": 11,
+  "failed": 0,
+  "question_types": {
+    "factual": {
+      "total": 5,
+      "successful": 5
+    },
+    "methodological": {
+      "total": 3,
+      "successful": 3
+    },
+    "unanswerable": {
+      "total": 2,
+      "successful": 2
+    },
+    "comparative": {
+      "total": 1,
+      "successful": 1
+    }
+  },
+  "average_latency_seconds": 207.9,
+  "note": "Answer correctness and retrieval relevance require separate human review; successful execution does not mean an answer is correct."
+}

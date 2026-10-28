@@ -141,3 +141,7 @@ researchpilot-ai/
 ## Project Status
 
 The core application, paper library, question-answering pipeline, comparison modes, automated tests, and initial evaluation pipeline are implemented. Further work is focused on retrieval reliability, answer quality, performance, and portfolio presentation.
+
+## Architecture
+
+See the [ResearchPilot AI architecture diagram](docs/architecture.md) for an overview of the PDF ingestion, semantic retrieval, RAG question-answering, and evaluation pipeline.
